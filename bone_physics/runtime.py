@@ -12,7 +12,7 @@ import numpy as np
 from bpy.app.handlers import persistent
 from mathutils import Vector
 
-from . import gn
+from . import gn, tips
 from .bone_sim import BoneParams, TailState, step_tail
 from .vertex_sim import Capsule, SimParams, VertexLayer
 from .weights import dense, sparse_groups
@@ -25,6 +25,7 @@ _prev_colliders = {}  # "frame" -> int, "data" -> snapshot of last frame's colli
 
 
 def reset_all():
+    tips.clear_cache()
     _meshes.clear()
     _tails.clear()
     _last_frame.clear()
@@ -72,7 +73,7 @@ def bone_capsule_world(arm, pb):
     """World-space capsule for a pose bone marked as a collider."""
     c = pb.bp_bone_collider
     world = arm.matrix_world
-    return WorldCollider(world @ pb.head, world @ pb.tail,
+    return WorldCollider(world @ pb.head, tips.tip_pose_world(arm, pb),
                          c.radius, c.radius_tail, arm.name, pb.name)
 
 
@@ -201,8 +202,9 @@ def step_armature(scene, arm, world_colliders, prev_colliders=None):
                     parent_world = animated(parent.name)
                 base = parent_world @ (parent.bone.matrix_local.inverted() @ bone.matrix_local)
 
+            tip = tips.tip_local(bone)  # next joint, not the (unreliable) tail
             head = base.translation.copy()
-            target_tail = base @ Vector((0.0, bone.length, 0.0))
+            target_tail = base @ tip
             length = (target_tail - head).length
 
             s = pb.bp_bone
@@ -223,7 +225,7 @@ def step_armature(scene, arm, world_colliders, prev_colliders=None):
 
             rot = base.to_3x3().normalized()
             local_dir = rot.inverted() @ (Vector(tail) - head)
-            q = Vector((0.0, 1.0, 0.0)).rotation_difference(local_dir)
+            q = tip.normalized().rotation_difference(local_dir)
             last_q[pb.name] = q
             simulated[pb.name] = base @ q.to_matrix().to_4x4()
 

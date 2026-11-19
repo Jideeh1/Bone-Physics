@@ -104,39 +104,49 @@ def pick_rig(name):
 
 
 def test_animation(rig, pattern, forward, frames):
-    """Alternating leg lifts on bones matching `pattern`, toward `forward`."""
-    axis = {"-Y": Vector((0, -1, 0)), "+Y": Vector((0, 1, 0)),
-            "-X": Vector((-1, 0, 0)), "+X": Vector((1, 0, 0))}[forward]
+    """Alternating leg lifts on bones matching `pattern`, toward `forward`.
+
+    Legs swing about a world axis (converted to each bone's local space), so
+    this works whatever way the rig's bones are oriented.
+    """
+    from mathutils import Quaternion
+
+    from bone_physics import tips
+
+    fwd = {"-Y": Vector((0, -1, 0)), "+Y": Vector((0, 1, 0)),
+           "-X": Vector((-1, 0, 0)), "+X": Vector((1, 0, 0))}[forward]
+    side = fwd.cross(Vector((0, 0, 1))).normalized()
     legs = bp_setup.match_bones(rig, pattern)
     if not legs:
         raise SystemExit(f"no bones match {pattern!r} for the test animation")
     if rig.animation_data is None:
         rig.animation_data_create()
     rig.animation_data.action = None
+    for pb in rig.pose.bones:
+        pb.matrix_basis.identity()
+    bpy.context.view_layer.update()
 
-    def lift_sign(pb):
-        pb.rotation_mode = 'XYZ'
-        pb.rotation_euler = (0.4, 0, 0)
-        bpy.context.view_layer.update()
-        tip = rig.matrix_world @ pb.tail
-        pb.rotation_euler = (0, 0, 0)
-        bpy.context.view_layer.update()
-        rest = rig.matrix_world @ pb.tail
-        return 1.0 if (tip - rest).dot(axis) > 0 else -1.0
+    # Only top-level legs (e.g. thighs, not calves under them) are driven.
+    names = {pb.name for pb in legs}
+    legs = [pb for pb in legs if not (pb.parent and pb.parent.name in names)]
 
-    # Split legs into two groups by side so they alternate.
     world = rig.matrix_world
-    side_axis = Vector((1, 0, 0)) if forward in ("-Y", "+Y") else Vector((0, 1, 0))
     t = frames
     keys = [(1, 0, 0), (int(t * 0.18), 1.1, -0.3), (int(t * 0.35), 0, 0),
             (int(t * 0.53), -0.3, 1.1), (int(t * 0.7), 0, 0), (int(t * 0.82), 0.7, 0.7), (t, 0, 0)]
     for pb in legs:
-        sign = lift_sign(pb)
-        col = 1 if (world @ pb.head).dot(side_axis) >= 0 else 2
-        pb.rotation_mode = 'XYZ'
+        rest_rot = (world @ pb.bone.matrix_local).to_3x3().normalized()
+        axis_local = (rest_rot.inverted() @ side).normalized()
+        pb.rotation_mode = 'QUATERNION'
+        # Which sign swings the tip forward?
+        tip0 = tips.tip_pose_world(rig, pb)
+        pb.rotation_quaternion = Quaternion(axis_local, 0.4)
+        bpy.context.view_layer.update()
+        sign = 1.0 if (tips.tip_pose_world(rig, pb) - tip0).dot(fwd) > 0 else -1.0
+        col = 1 if (world @ pb.head).dot(side) >= 0 else 2
         for key in keys:
-            pb.rotation_euler = (sign * key[col], 0, 0)
-            pb.keyframe_insert("rotation_euler", index=0, frame=key[0])
+            pb.rotation_quaternion = Quaternion(axis_local, sign * key[col])
+            pb.keyframe_insert("rotation_quaternion", frame=key[0])
     print(f"test animation on: {[pb.name for pb in legs]}")
 
 
@@ -182,6 +192,10 @@ def main():
         if args.test_anim or not has_action:
             test_animation(rig, args.thigh or args.colliders, args.forward, args.frames)
             scene.frame_start, scene.frame_end = 1, args.frames
+        else:  # play the rig's own action over its own range
+            start, end = rig.animation_data.action.frame_range
+            scene.frame_start = int(start)
+            scene.frame_end = min(int(end), int(start) + args.frames - 1)
         scene.frame_set(scene.frame_start)
 
         meshes = deformed_by(rig)

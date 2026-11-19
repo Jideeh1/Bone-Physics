@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from . import gn
+from . import gn, tips
 from .weights import sparse_groups
 
 
@@ -32,12 +32,13 @@ def fit_bone_radius(context, arm, pb, percentile=90.0, min_weight=0.5):
     """Returns (head_radius, tail_radius) in world units, or None.
 
     Uses the skinned vertices weighted to this bone (weight >= min_weight):
-    their distance from the bone axis, split into the head and tail thirds.
+    their distance from the bone axis (head to next joint), split into the
+    head and tip thirds.
     """
     depsgraph = context.evaluated_depsgraph_get()
     world = arm.matrix_world
     a = np.array(world @ pb.head)
-    b = np.array(world @ pb.tail)
+    b = np.array(tips.tip_pose_world(arm, pb))
     ab = b - a
     denom = float(ab @ ab)
     if denom < 1e-12:
