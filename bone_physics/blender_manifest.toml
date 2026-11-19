@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "bone_physics"
+version = "0.1.0"
+name = "Bone Physics"
+tagline = "Vertex-level secondary motion with collision for skinned meshes"
+maintainer = "Your Name <you@example.com>"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+
+website = "https://github.com/jideeh1/bone-physics"
+
+# Placeholder: pick the license you want before publishing.
+license = [
+    "SPDX:GPL-3.0-or-later",
+]
+
+tags = ["Animation", "Rigging"]
