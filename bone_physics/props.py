@@ -56,6 +56,14 @@ class BP_MeshSettings(PropertyGroup):
         description="Maximum distance a vertex may move away from its skinned position (0 = no limit)",
         subtype='DISTANCE', min=0.0, default=0.15,
     )
+    ignore_weight: FloatProperty(
+        name="Ignore Own Bone",
+        description=(
+            "A vertex skips a bone collider when its weight to that bone is at least this. "
+            "Stops skin from colliding with the bone that moves it"
+        ),
+        min=0.0, max=1.0, default=0.5,
+    )
 
 
 class BP_ColliderSettings(PropertyGroup):
@@ -87,4 +95,58 @@ class BP_ColliderSettings(PropertyGroup):
         name="Length",
         description="Capsule length (ignored for spheres)",
         subtype='DISTANCE', min=0.0, default=0.5,
+    )
+
+
+class BP_BoneSettings(PropertyGroup):
+    """Stored on pose bones (PoseBone.bp_bone): bone-chain simulation."""
+
+    simulate: BoolProperty(
+        name="Simulate",
+        description="Simulate this bone as a jiggle/secondary-motion bone",
+        default=False,
+    )
+    stiffness: FloatProperty(
+        name="Stiffness",
+        description="Pull back toward the animated pose per step",
+        min=0.0, max=1.0, default=0.1,
+    )
+    damping: FloatProperty(
+        name="Damping",
+        description="Fraction of velocity kept per step",
+        min=0.0, max=1.0, default=0.85,
+    )
+    gravity_scale: FloatProperty(
+        name="Gravity",
+        min=0.0, soft_max=3.0, default=1.0,
+    )
+    radius: FloatProperty(
+        name="Tail Radius",
+        description="Collision radius of the bone tail",
+        subtype='DISTANCE', min=0.0, default=0.02,
+    )
+    iterations: IntProperty(
+        name="Iterations",
+        min=1, max=32, default=4,
+    )
+
+
+class BP_BoneColliderSettings(PropertyGroup):
+    """Stored on pose bones (PoseBone.bp_bone_collider): bone as a tapered capsule.
+    Radii are world units (refit after scaling the armature)."""
+
+    enabled: BoolProperty(
+        name="Bone Collider",
+        description="Use this bone as a capsule collider (head to tail)",
+        default=False,
+    )
+    radius: FloatProperty(
+        name="Head Radius",
+        description="Capsule radius at the bone head",
+        subtype='DISTANCE', min=0.0, default=0.05,
+    )
+    radius_tail: FloatProperty(
+        name="Tail Radius",
+        description="Capsule radius at the bone tail",
+        subtype='DISTANCE', min=0.0, default=0.05,
     )

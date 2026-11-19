@@ -53,11 +53,16 @@ def ensure(obj):
         mod = obj.modifiers.new(MOD_NAME, 'NODES')
     mod.node_group = _build_group()
 
-    # Must come after the armature (and any other deformer) to be correct.
-    index = len(obj.modifiers) - 1
+    # Must come right after the last Armature modifier: the offsets are
+    # computed against the skinned positions.
     current = obj.modifiers.find(MOD_NAME)
-    if current != index:
-        obj.modifiers.move(current, index)
+    armature_indices = [i for i, m in enumerate(obj.modifiers) if m.type == 'ARMATURE']
+    target = armature_indices[-1] + 1 if armature_indices else len(obj.modifiers) - 1
+    if current < target:
+        target -= 1  # moving down shifts the armature index by one
+    target = min(target, len(obj.modifiers) - 1)
+    if current != target:
+        obj.modifiers.move(current, target)
     return mod
 
 
@@ -90,3 +95,11 @@ def read_offsets(obj):
     flat = np.empty(n * 3, dtype=np.float32)
     attr.data.foreach_get("vector", flat)
     return flat.reshape(n, 3).astype(np.float64)
+
+
+def modifiers_after(obj):
+    """Enabled modifiers below the offset modifier (they may change topology)."""
+    index = obj.modifiers.find(MOD_NAME)
+    if index < 0:
+        return []
+    return [m for m in list(obj.modifiers)[index + 1:] if m.show_viewport]

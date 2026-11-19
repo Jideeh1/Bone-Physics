@@ -10,17 +10,29 @@ layer writes that offset back to the mesh after the Armature modifier.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Capsule:
-    """Segment a-b swept by `radius`. A sphere is a capsule with a == b."""
+    """Segment a-b swept by a radius that tapers linearly from `radius` (at a)
+    to `radius_b` (at b). A sphere is a capsule with a == b.
+
+    `ignore` is an optional (N,) bool mask of vertices this collider skips,
+    e.g. vertices that are skinned to the collider bone itself.
+    """
 
     a: np.ndarray
     b: np.ndarray
     radius: float
+    radius_b: Optional[float] = None
+    ignore: Optional[np.ndarray] = None
+
+    @property
+    def rb(self):
+        return self.radius if self.radius_b is None else self.radius_b
 
     @staticmethod
     def sphere(center, radius):
@@ -39,28 +51,42 @@ class SimParams:
     iterations: int = 8            # constraint solver iterations per step
 
 
-def _closest_point_on_segment(p, a, b):
+def _closest_on_segment(p, a, b):
+    """Returns (t, q): clamped parameter along a-b and the closest points."""
     ab = b - a
     denom = float(ab @ ab)
     if denom < 1e-12:
-        return np.broadcast_to(a, p.shape).copy()
+        return np.zeros(len(p)), np.broadcast_to(a, p.shape).copy()
     t = np.clip((p - a) @ ab / denom, 0.0, 1.0)
-    return a + t[:, None] * ab
+    return t, a + t[:, None] * ab
+
+
+def penetration_depth(p, collider):
+    """Signed depth of each point inside the collider (> 0 means inside)."""
+    t, q = _closest_on_segment(p, collider.a, collider.b)
+    radius = collider.radius + (collider.rb - collider.radius) * t
+    return radius - np.linalg.norm(p - q, axis=1)
 
 
 def push_out(p, collider, thickness):
-    """Project points out of a capsule (in place). Returns nothing."""
-    q = _closest_point_on_segment(p, collider.a, collider.b)
+    """Project points out of a (tapered) capsule, in place.
+
+    For tapered capsules the surface point is taken radially from the closest
+    axis point, which is exact for constant radius and a close approximation
+    for gentle tapers such as limbs.
+    """
+    t, q = _closest_on_segment(p, collider.a, collider.b)
     d = p - q
     dist = np.linalg.norm(d, axis=1)
-    radius = collider.radius + thickness
+    radius = collider.radius + (collider.rb - collider.radius) * t + thickness
     inside = dist < radius
+    if collider.ignore is not None:
+        inside &= ~collider.ignore
     if not np.any(inside):
         return
     safe = np.where(dist > 1e-9, dist, 1.0)
     normal = d / safe[:, None]
-    degenerate = dist <= 1e-9
-    normal[degenerate] = (0.0, 0.0, 1.0)  # point exactly on the axis: push up
+    normal[dist <= 1e-9] = (0.0, 0.0, 1.0)  # point exactly on the axis: push up
     penetration = radius - dist
     p[inside] += normal[inside] * penetration[inside, None]
 

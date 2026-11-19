@@ -1,77 +1,104 @@
 # Bone Physics
 
-A Blender add-on that adds vertex-level secondary motion with collision to
-skinned meshes. Bones drive the mesh as usual. Each vertex is then simulated
-as a particle that follows its skinned position and is pushed out of
-colliders, so flared parts react to colliders instead of passing through them.
+A Blender 5.2+ add-on for bone-chain secondary motion (skirts, hair, tails)
+that also keeps the **mesh** out of colliders, not just the bones.
 
-Requires **Blender 5.2+**.
+## The problem it solves
+
+Classic bone physics simulates bones and collides bones. The mesh is then
+skinned to those bones, so geometry that flares out between or away from the
+bones (a skirt between its chains, for example) still passes through the legs
+even when every bone is outside the collider.
+
+Bone Physics runs two layers each frame:
+
+1. **Bone chains.** Bones marked *Simulate* swing with inertia and gravity and
+   are pushed out of colliders.
+2. **Vertex collision.** After skinning, each vertex in the mask is a particle
+   that follows its skinned position and is pushed out of the same colliders.
+   The correction is applied by a Geometry Nodes modifier placed right after
+   the Armature modifier.
+
+Colliders can be **bones**: a bone marked as a collider is a tapered capsule
+from head to tail. Its radii can be fitted automatically to the skin that bone
+deforms. A vertex skips the collider of a bone it is weighted to, so skin never
+fights its own bone. Spheres and capsules on regular objects also work.
+
+## Measured on the stand-in skirt rig
+
+`examples/run_skirt.py`: hips, thigh and shin bones, a flared skirt on
+10 two-bone chains, legs kicking up into the skirt (80 frames). The number is
+skirt vertices inside the thigh/shin capsules, summed over all frames.
+
+| mode | vertex-frames inside | frames with penetration |
+|---|---|---|
+| no physics | 1017 | 27 |
+| bone physics only | 1138 | 44 |
+| bones + vertex collision | **0** | **0** |
 
 ## Layout
 
 ```
 bone_physics/
-  blender_manifest.toml   extension manifest
+  blender_manifest.toml   extension manifest (Blender 5.2+)
   __init__.py             register / unregister
-  vertex_sim.py           pure numpy solver (no bpy; unit tested)
-  runtime.py              frame driver: skinned pose, colliders, writes offsets
-  gn.py                   Geometry Nodes modifier that applies the offsets
-  props.py                per-mesh and per-collider settings
-  operators.py            enable/disable, reset
-  panel.py                3D View > sidebar > Bone Physics
+  vertex_sim.py           vertex layer solver + capsule collision (pure numpy)
+  bone_sim.py             bone tail solver (pure numpy)
+  runtime.py              per-frame driver: colliders, bone chains, vertex layer
+  fit.py                  fit bone collider radii to skin
+  gn.py                   Geometry Nodes offset modifier
+  weights.py              vertex group helpers
+  props.py / operators.py / panel.py   settings, operators, sidebar UI
 tests/test_vertex_sim.py  solver unit tests (no Blender needed)
-examples/demo_scene.py    flared tube + swinging bone + sphere collider
-examples/render_demo.py   render PNG frames (and MP4) with sim on or off
-examples/verify_penetration.py   headless count of vertices inside the collider
+examples/
+  skirt_scene.py          stand-in lower body: skirt chains + thighs/shins
+  run_skirt.py            none / bones / full comparison, metrics + videos
+  model_tool.py           same comparison on a real .blend/.fbx character
+  bp_setup.py             shared setup by bone-name regex, measurement, ffmpeg
+  demo_scene.py, render_demo.py, verify_penetration.py   first sphere demo
 ```
 
-## How it works
+## Usage in Blender
 
-1. The Armature modifier produces the skinned pose.
-2. Each frame, `runtime.py` reads the evaluated mesh, removes the offsets it
-   wrote last frame, and gets the pure skinned positions.
-3. `vertex_sim.py` runs Verlet integration, a spring toward the skinned pose,
-   edge constraints (keep the skinned spacing), collision projection against
-   capsules/spheres, and a max-offset clamp.
-4. The offsets are written to the `bp_offset` attribute. A Geometry Nodes
-   modifier placed after the armature adds them to the positions.
+1. Install the `bone_physics` folder as an extension (Blender 5.2+).
+2. 3D View > sidebar > **Bone Physics**.
+3. Pose Mode, select the skirt bones, click **Simulate Selected**. Tune
+   Stiffness, Damping, Gravity and Tail Radius, then **Copy to Selected**.
+4. Select the thigh (and shin) bones, click **Make Selected Colliders**. Radii
+   are fitted to the skin; adjust them or use **Fit Collider Radii** again.
+5. Object Mode, select the mesh with the skirt, set **Mask** to a vertex group
+   covering the skirt, click **Enable** under Vertex Collision.
+6. Play from the first frame. Jumping or scrubbing backward resets the sim.
 
-## Usage
+All distances are in world units (meters).
 
-1. Install the add-on (Blender 5.2+, Extensions > Install from Disk, or copy
-   the `bone_physics` folder into your extensions/add-ons path).
-2. Select a skinned mesh. In the sidebar, open **Bone Physics** and click
-   **Enable**.
-3. Select any object and tick **Collider** in its Bone Physics panel. Spheres
-   and capsules are supported. Scale on the collider object scales its size.
-4. Scrub or play the timeline. Simulation runs frame by frame. Scrubbing
-   backward, or jumping, resets the simulation.
-
-Tune Stiffness and Shape Keep for how much the flare lags and holds shape,
-Solver Iterations and Substeps for stiffness and stability, and Max Offset to
-cap how far vertices can travel.
-
-## Tests and demos
-
-Solver unit tests (plain Python + numpy, no Blender):
+## Running on a real character
 
 ```
-python -m unittest discover -s tests -v
+python examples/model_tool.py --file Character.blend --list --grep "skirt|thigh"
+python examples/model_tool.py --file Character.blend --skirt "skirt" --colliders "thigh" \
+    --render --out renders/character --save-blend renders/character_bp.blend
 ```
 
-Render the demo (needs the `bpy` module from PyPI, Blender 5.2 build):
+The tool builds the skirt mask from the skirt bones' vertex groups. It uses the
+rig's own animation if it has one, otherwise it generates leg lifts on the
+`--thigh` bones. It writes per-mode MP4s, a side-by-side `comparison.mp4`, and
+optionally a configured `.blend`.
+
+## Tests
 
 ```
-python examples/render_demo.py --sim off --out renders/off --video
-python examples/render_demo.py --sim on  --out renders/on  --video
-python examples/verify_penetration.py
+python -m unittest discover -s tests -v       # solvers, no Blender
+python examples/run_skirt.py                  # needs the bpy module (pip install bpy==5.2.4, Python 3.13)
 ```
 
-## Limitations (current prototype)
+## Limitations
 
-- Colliders are spheres and capsules only. Mesh colliders are not implemented.
-- No friction and no self-collision (flare against the body).
-- Simulation is per frame and runs in Python. Dense meshes will be slow. The
-  mask group should cover only the flared regions.
-- Object scale is assumed uniform for collider radii.
-- The mesh data must be single-user.
+- Collision is projection-based: a vertex is pushed to the nearest surface.
+  Very fast motion can tunnel. Raise Substeps if it does.
+- The bone simulation ignores the simulated bones' own keyframes (the target
+  is the rest pose relative to the parent).
+- No friction, no skirt self-collision, no mesh (triangle) colliders yet.
+- Python per-frame cost grows with mask size. Keep the mask to the parts
+  that need it.
+- Modifiers that change vertex count must sit below the Armature modifier.
