@@ -21,18 +21,22 @@ from .weights import dense, sparse_groups
 _meshes = {}      # mesh object name -> _MeshState
 _tails = {}       # (armature name, bone name) -> TailState
 _last_frame = {}  # ("mesh"|"arm", name) -> last simulated frame
+_prev_colliders = {}  # "frame" -> int, "data" -> snapshot of last frame's colliders
 
 
 def reset_all():
     _meshes.clear()
     _tails.clear()
     _last_frame.clear()
+    _arm_prev.clear()
+    _prev_colliders.clear()
 
 
 def forget(obj_name):
     _meshes.pop(obj_name, None)
     _last_frame.pop(("mesh", obj_name), None)
     _last_frame.pop(("arm", obj_name), None)
+    _arm_prev.pop(obj_name, None)
     for key in [k for k in _tails if k[0] == obj_name]:
         del _tails[key]
 
@@ -117,60 +121,117 @@ def sim_armatures(scene):
             if o.type == 'ARMATURE' and any(pb.bp_bone.simulate for pb in o.pose.bones)]
 
 
-def step_armature(scene, arm, world_colliders):
+def collider_key(c):
+    return (c.owner, c.bone)
+
+
+def lerp_colliders(prev, now, alpha):
+    """Colliders at a point between the previous frame (alpha 0) and now (1).
+
+    `prev` maps collider_key -> (a, b) from the previous frame. Interpolating
+    lets substeps see the limb sweep through the frame instead of jumping,
+    so cloth is pushed from the side the limb arrives on.
+    """
+    if not prev or alpha >= 1.0:
+        return now
+    out = []
+    for c in now:
+        old = prev.get(collider_key(c))
+        if old is None:
+            out.append(c)
+            continue
+        a = old[0] + (c.a - old[0]) * alpha
+        b = old[1] + (c.b - old[1]) * alpha
+        out.append(WorldCollider(a, b, c.ra, c.rb, c.owner, c.bone))
+    return out
+
+
+def snapshot_colliders(colliders):
+    return {collider_key(c): (c.a.copy(), c.b.copy()) for c in colliders}
+
+
+_arm_prev = {}  # armature name -> {bone name or "": world matrix} from last frame
+
+
+def step_armature(scene, arm, world_colliders, prev_colliders=None):
     key = ("arm", arm.name)
     frame = scene.frame_current
     if _last_frame.get(key) == frame:
         return
     continuous = _last_frame.get(key) == frame - 1
 
-    world = arm.matrix_world
+    world = arm.matrix_world.copy()
     gravity = np.array(scene.gravity)
-    dt = 1.0 / _fps(scene)
-    simulated = {}  # bone name -> world matrix of the simulated pose
+    bones = sim_bones(arm)
+    names = {pb.name for pb in bones}
 
-    for pb in sim_bones(arm):
-        bone = pb.bone
-        parent = pb.parent
-        # Pose the bone would have with no local rotation of its own: the
-        # parent's (possibly simulated) pose times the rest offset.
-        if parent is None:
-            base = world @ bone.matrix_local
-        else:
-            parent_world = simulated.get(parent.name)
-            if parent_world is None:
-                parent_world = world @ parent.matrix
-            base = parent_world @ (parent.bone.matrix_local.inverted() @ bone.matrix_local)
+    # Animated (non-simulated) parents, now and at the previous frame.
+    anim_now = {"": world}
+    for pb in bones:
+        if pb.parent is not None and pb.parent.name not in names:
+            anim_now[pb.parent.name] = world @ pb.parent.matrix
+    anim_prev = _arm_prev.get(arm.name) if continuous else None
 
-        head = base.translation.copy()
-        target_tail = base @ Vector((0.0, bone.length, 0.0))
-        length = (target_tail - head).length
+    substeps = max(1, max(pb.bp_bone.substeps for pb in bones)) if continuous else 1
+    dt = (1.0 / _fps(scene)) / substeps if continuous else 0.0
+    last_q = {}
 
-        s = pb.bp_bone
-        params = BoneParams(stiffness=s.stiffness, damping=s.damping,
-                            gravity_scale=s.gravity_scale, radius=s.radius,
-                            iterations=s.iterations)
-        skip = {pb.name, parent.name if parent else None}
-        colliders = [c.capsule() for c in world_colliders
-                     if not (c.owner == arm.name and c.bone in skip)]
+    for k in range(substeps):
+        alpha = (k + 1) / substeps
+        frame_colliders = lerp_colliders(prev_colliders if continuous else None,
+                                         world_colliders, alpha)
+        simulated = {}  # bone name -> world matrix of the simulated pose
 
-        state = _tails.get((arm.name, pb.name))
-        step_dt = dt
-        if state is None or not continuous:
-            state = TailState(np.array(target_tail))
-            _tails[(arm.name, pb.name)] = state
-            step_dt = 0.0  # resolve collisions only
+        def animated(name):
+            now = anim_now.get(name)
+            if anim_prev is None or name not in anim_prev or alpha >= 1.0:
+                return now
+            return anim_prev[name].lerp(now, alpha)
 
-        tail = step_tail(state, np.array(head), np.array(target_tail), length,
-                         colliders, gravity, step_dt, params)
+        for pb in bones:
+            bone = pb.bone
+            parent = pb.parent
+            # Pose the bone would have with no local rotation of its own: the
+            # parent's (possibly simulated) pose times the rest offset.
+            if parent is None:
+                base = animated("") @ bone.matrix_local
+            else:
+                parent_world = simulated.get(parent.name)
+                if parent_world is None:
+                    parent_world = animated(parent.name)
+                base = parent_world @ (parent.bone.matrix_local.inverted() @ bone.matrix_local)
 
-        rot = base.to_3x3().normalized()
-        local_dir = rot.inverted() @ (Vector(tail) - head)
-        q = Vector((0.0, 1.0, 0.0)).rotation_difference(local_dir)
+            head = base.translation.copy()
+            target_tail = base @ Vector((0.0, bone.length, 0.0))
+            length = (target_tail - head).length
+
+            s = pb.bp_bone
+            params = BoneParams(stiffness=s.stiffness, damping=s.damping,
+                                gravity_scale=s.gravity_scale, radius=s.radius,
+                                iterations=s.iterations)
+            skip = {pb.name, parent.name if parent else None}
+            colliders = [c.capsule() for c in frame_colliders
+                         if not (c.owner == arm.name and c.bone in skip)]
+
+            state = _tails.get((arm.name, pb.name))
+            if state is None or not continuous:
+                state = TailState(np.array(target_tail))
+                _tails[(arm.name, pb.name)] = state
+
+            tail = step_tail(state, np.array(head), np.array(target_tail), length,
+                             colliders, gravity, dt, params)
+
+            rot = base.to_3x3().normalized()
+            local_dir = rot.inverted() @ (Vector(tail) - head)
+            q = Vector((0.0, 1.0, 0.0)).rotation_difference(local_dir)
+            last_q[pb.name] = q
+            simulated[pb.name] = base @ q.to_matrix().to_4x4()
+
+    for pb in bones:
         pb.rotation_mode = 'QUATERNION'
-        pb.rotation_quaternion = q
-        simulated[pb.name] = base @ q.to_matrix().to_4x4()
+        pb.rotation_quaternion = last_q[pb.name]
 
+    _arm_prev[arm.name] = anim_now
     _last_frame[key] = frame
 
 
@@ -207,6 +268,7 @@ class _MeshState:
         self.edges = sub[(sub >= 0).all(axis=1)] if len(sub) else sub.reshape(-1, 2)
 
         self.layer = VertexLayer()
+        self.skin_prev = None
         self._group_cache = {}
 
     def group_weights(self, name):
@@ -282,7 +344,7 @@ def _params(s, obj):
                      edge_stiffness=s.edge_stiffness, iterations=s.iterations)
 
 
-def step(scene, obj, world_colliders=None, depsgraph=None):
+def step(scene, obj, world_colliders=None, depsgraph=None, prev_colliders=None):
     """Advance one frame for one mesh object. Safe to call repeatedly per frame."""
     s = obj.bp_mesh
     key = ("mesh", obj.name)
@@ -309,18 +371,26 @@ def step(scene, obj, world_colliders=None, depsgraph=None):
         state.layer.reset(skin_full[state.active])
 
     skin = skin_full[state.active]
-    colliders = _local_colliders(obj, state, s, world_colliders)
     gravity = np.array(obj.matrix_world.inverted().to_3x3() @ Vector(scene.gravity))
     params = _params(s, obj)
 
     if not continuous:
         # dt=0: no motion, but collisions resolve, so the first frame is clean.
+        colliders = _local_colliders(obj, state, s, world_colliders)
         offset = state.layer.step(skin, state.weights, state.edges, colliders, gravity, 0.0, params)
     else:
+        # Substeps interpolate the skinned target and the colliders from the
+        # previous frame to this one, so fast limbs sweep instead of teleport.
         substeps = max(1, int(s.substeps))
         dt = 1.0 / _fps(scene) / substeps
-        for _ in range(substeps):
-            offset = state.layer.step(skin, state.weights, state.edges, colliders, gravity, dt, params)
+        skin_prev = state.skin_prev if state.skin_prev is not None else skin
+        for k in range(substeps):
+            alpha = (k + 1) / substeps
+            skin_k = skin_prev + (skin - skin_prev) * alpha
+            colliders = _local_colliders(obj, state, s,
+                                         lerp_colliders(prev_colliders, world_colliders, alpha))
+            offset = state.layer.step(skin_k, state.weights, state.edges, colliders, gravity, dt, params)
+    state.skin_prev = skin
 
     full = np.zeros((n, 3))
     full[state.active] = offset
@@ -343,16 +413,26 @@ def on_frame_change(scene, *_args):
     if not armatures and not meshes:
         return
 
+    frame = scene.frame_current
+    prev = _prev_colliders.get("data") if _prev_colliders.get("frame") == frame - 1 else None
+    if _prev_colliders.get("frame") == frame:
+        prev = _prev_colliders.get("before")  # re-run of the same frame
+
     colliders = gather_colliders(scene)
     for arm in armatures:
-        step_armature(scene, arm, colliders)
+        step_armature(scene, arm, colliders, prev)
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
     if armatures:
         depsgraph.update()  # skin meshes with the simulated bones
         colliders = gather_colliders(scene)
     for obj in meshes:
-        step(scene, obj, colliders, depsgraph)
+        step(scene, obj, colliders, depsgraph, prev)
+
+    if _prev_colliders.get("frame") != frame:
+        _prev_colliders["before"] = prev
+        _prev_colliders["data"] = snapshot_colliders(colliders)
+        _prev_colliders["frame"] = frame
 
 
 @persistent

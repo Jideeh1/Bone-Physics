@@ -142,6 +142,6 @@ class BP_OT_copy_bone_settings(bpy.types.Operator):
     def execute(self, context):
         src = context.active_pose_bone.bp_bone
         for pb in _selected_pose_bones(context):
-            for name in ("simulate", "stiffness", "damping", "gravity_scale", "radius", "iterations"):
+            for name in ("simulate", "stiffness", "damping", "gravity_scale", "radius", "iterations", "substeps"):
                 setattr(pb.bp_bone, name, getattr(src, name))
         return {'FINISHED'}

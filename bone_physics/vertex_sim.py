@@ -68,6 +68,102 @@ def penetration_depth(p, collider):
     return radius - np.linalg.norm(p - q, axis=1)
 
 
+def fallback_normals(seg_dirs, a, b):
+    """Push directions for contacts lying exactly on a collider's axis, where
+    "away from the axis" is undefined: perpendicular to both the segment and
+    the axis (or to the axis alone, or +Z for spheres)."""
+    axis = b - a
+    n_axis = np.linalg.norm(axis)
+    out = np.tile(np.array([0.0, 0.0, 1.0]), (len(seg_dirs), 1))
+    if n_axis < 1e-9:
+        return out
+    axis = axis / n_axis
+    cand = np.cross(seg_dirs, axis)
+    norm = np.linalg.norm(cand, axis=1)
+    ok = norm > 1e-9
+    out[ok] = cand[ok] / norm[ok, None]
+    # Segment parallel to the axis (or a point): any perpendicular to the axis.
+    ref = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    perp = np.cross(axis, ref)
+    out[~ok] = perp / np.linalg.norm(perp)
+    return out
+
+
+def closest_segments(p0, p1, a, b):
+    """Closest points between many segments p0-p1 (N,3) and one segment a-b.
+
+    Returns (s, t, c1, c2): parameters on p0-p1 and a-b, and the points.
+    """
+    d1 = p1 - p0
+    d2 = b - a
+    r = p0 - a
+    A = np.einsum("ij,ij->i", d1, d1)
+    E = float(d2 @ d2)
+    F = r @ d2
+    n = len(p0)
+    eps = 1e-12
+    if E <= eps:
+        t = np.zeros(n)
+        s = np.where(A > eps, np.clip(-np.einsum("ij,ij->i", r, d1) / np.maximum(A, eps), 0, 1), 0.0)
+    else:
+        C = np.einsum("ij,ij->i", d1, r)
+        B = d1 @ d2
+        denom = A * E - B * B
+        s = np.where(denom > eps, np.clip((B * F - C * E) / np.where(denom > eps, denom, 1.0), 0, 1), 0.0)
+        t = (B * s + F) / E
+        lo, hi = t < 0.0, t > 1.0
+        safe_a = np.maximum(A, eps)
+        s = np.where(lo, np.clip(-C / safe_a, 0, 1), s)
+        s = np.where(hi, np.clip((B - C) / safe_a, 0, 1), s)
+        t = np.clip(t, 0.0, 1.0)
+        degenerate = A <= eps
+        s = np.where(degenerate, 0.0, s)
+        t = np.where(degenerate, np.clip(F / E, 0, 1), t)
+    c1 = p0 + d1 * s[:, None]
+    c2 = a + d2 * t[:, None]
+    return s, t, c1, c2
+
+
+def segment_depth(p0, p1, collider):
+    """How deep each segment p0-p1 reaches into the collider (> 0 = crossing)."""
+    _, t, c1, c2 = closest_segments(p0, p1, collider.a, collider.b)
+    radius = collider.radius + (collider.rb - collider.radius) * t
+    return radius - np.linalg.norm(c1 - c2, axis=1)
+
+
+def push_edges_out(p, edges, collider, thickness):
+    """Push edges that cross a collider out (in place), moving both ends so
+    the contact point clears the surface. Catches faces spanning a thin limb
+    even when every vertex is outside it."""
+    if not len(edges):
+        return
+    i0, i1 = edges[:, 0], edges[:, 1]
+    s, t, c1, c2 = closest_segments(p[i0], p[i1], collider.a, collider.b)
+    d = c1 - c2
+    dist = np.linalg.norm(d, axis=1)
+    radius = collider.radius + (collider.rb - collider.radius) * t + thickness
+    hit = dist < radius
+    if collider.ignore is not None:
+        hit &= ~(collider.ignore[i0] | collider.ignore[i1])
+    if not np.any(hit):
+        return
+    i0, i1, s, d, dist, radius = i0[hit], i1[hit], s[hit], d[hit], dist[hit], radius[hit]
+    normal = d / np.where(dist > 1e-9, dist, 1.0)[:, None]
+    degenerate = dist <= 1e-9
+    if np.any(degenerate):
+        normal[degenerate] = fallback_normals(p[i1[degenerate]] - p[i0[degenerate]], collider.a, collider.b)
+    pen = (radius - dist)[:, None] * normal
+    w0, w1 = 1.0 - s, s
+    norm = (w0 * w0 + w1 * w1)[:, None]
+    delta = np.zeros_like(p)
+    count = np.zeros(len(p))
+    np.add.at(delta, i0, pen * w0[:, None] / norm)
+    np.add.at(delta, i1, pen * w1[:, None] / norm)
+    np.add.at(count, i0, 1.0)
+    np.add.at(count, i1, 1.0)
+    p += delta / np.maximum(count, 1.0)[:, None]
+
+
 def push_out(p, collider, thickness):
     """Project points out of a (tapered) capsule, in place.
 
@@ -86,7 +182,9 @@ def push_out(p, collider, thickness):
         return
     safe = np.where(dist > 1e-9, dist, 1.0)
     normal = d / safe[:, None]
-    normal[dist <= 1e-9] = (0.0, 0.0, 1.0)  # point exactly on the axis: push up
+    degenerate = dist <= 1e-9
+    if np.any(degenerate):
+        normal[degenerate] = fallback_normals(np.zeros((int(degenerate.sum()), 3)), collider.a, collider.b)
     penetration = radius - dist
     p[inside] += normal[inside] * penetration[inside, None]
 
@@ -165,6 +263,7 @@ class VertexLayer:
                 p = _solve_edges(p, edges, rest, params.edge_stiffness)
             for collider in colliders:
                 push_out(p, collider, params.thickness)
+                push_edges_out(p, edges, collider, params.thickness)
 
         offset = p - skin
         norms = np.linalg.norm(offset, axis=1)

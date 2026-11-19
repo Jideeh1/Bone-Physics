@@ -62,12 +62,12 @@ def main():
             bp_setup.encode(frames_dir, os.path.join(args.out, f"{mode}.mp4"))
 
     print()
-    header = "frame " + " ".join(f"{m + ' in':>10} {'depth':>7}" for m in modes)
+    header = "frame " + " ".join(f"{m + ' edges':>11} {'depth':>7}" for m in modes)
     print(header)
     for i in range(args.frames):
-        cells = " ".join(f"{results[m][i][1]:>10} {results[m][i][2]:>7.3f}" for m in modes)
+        cells = " ".join(f"{results[m][i][1]:>11} {results[m][i][2]:>7.3f}" for m in modes)
         print(f"{i + 1:>5} {cells}")
-    summary = {m: {"vertex_frames_inside": sum(r[1] for r in results[m]),
+    summary = {m: {"edge_frames_crossing": sum(r[1] for r in results[m]),
                    "frames_with_penetration": sum(1 for r in results[m] if r[1] > 0),
                    "max_depth": max(r[2] for r in results[m])} for m in modes}
     print("\nsummary:", json.dumps(summary, indent=1))

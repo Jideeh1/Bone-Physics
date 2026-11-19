@@ -15,14 +15,14 @@ import bpy
 import numpy as np
 
 from bone_physics import fit, gn, runtime
-from bone_physics.vertex_sim import penetration_depth
+from bone_physics.vertex_sim import segment_depth
 from bone_physics.weights import dense, sparse_groups
 
 MASK_GROUP = "BP_SkirtMask"
 
-BONE_DEFAULTS = dict(stiffness=0.08, damping=0.85, gravity_scale=1.0, radius=0.02, iterations=6)
+BONE_DEFAULTS = dict(stiffness=0.08, damping=0.85, gravity_scale=1.0, radius=0.02, iterations=6, substeps=4)
 MESH_DEFAULTS = dict(stiffness=0.35, damping=0.7, gravity_scale=0.0, edge_stiffness=0.6,
-                     iterations=10, substeps=2, thickness=0.012, max_offset=0.25)
+                     iterations=10, substeps=4, thickness=0.02, max_offset=0.25)
 
 
 def match_bones(rig, pattern):
@@ -47,7 +47,7 @@ def build_mask(obj, bone_names):
 
 
 def setup(context, rig, meshes, skirt_pattern, collider_pattern, mode,
-          bone_params=None, mesh_params=None, percentile=90.0):
+          bone_params=None, mesh_params=None, percentile=98.0):
     """Configure physics. Returns dict with skirt bones, collider bones, masks."""
     bone_params = {**BONE_DEFAULTS, **(bone_params or {})}
     mesh_params = {**MESH_DEFAULTS, **(mesh_params or {})}
@@ -104,7 +104,9 @@ def world_positions(obj):
 
 
 def measure(rig, meshes, info, ignore_weight=0.5, tolerance=0.003):
-    """Skirt vertices (mask >= 0.5) inside any collider-bone capsule."""
+    """Skirt edges (both ends in the mask) that cut into any collider-bone
+    capsule. Counting edges, not vertices, catches cloth stretched across a
+    limb even when every vertex sits outside it. Returns (edges, max depth)."""
     capsules = [runtime.bone_capsule_world(rig, rig.pose.bones[name]).capsule()
                 for name in info["colliders"]]
     names = list(info["colliders"])
@@ -113,17 +115,25 @@ def measure(rig, meshes, info, ignore_weight=0.5, tolerance=0.003):
         mask = info["masks"][obj.name] >= 0.5
         if not mask.any():
             continue
-        pts = world_positions(obj)[mask]
-        groups = sparse_groups(obj) if not hasattr(obj, "_bp_groups") else obj._bp_groups
-        n = len(obj.data.vertices)
-        inside_any = np.zeros(len(pts), dtype=bool)
+        cache = info.setdefault("_cache", {}).setdefault(obj.name, {})
+        if "edges" not in cache:
+            n = len(obj.data.vertices)
+            flat = np.empty(len(obj.data.edges) * 2, dtype=np.int32)
+            obj.data.edges.foreach_get("vertices", flat)
+            edges = flat.reshape(-1, 2)
+            cache["edges"] = edges[mask[edges].all(axis=1)]
+            groups = sparse_groups(obj)
+            cache["own"] = {name: dense(groups.get(name), n) >= ignore_weight for name in names}
+        edges = cache["edges"]
+        pts = world_positions(obj)
+        crossing = np.zeros(len(edges), dtype=bool)
         for name, cap in zip(names, capsules):
-            own = dense(groups.get(name), n)[mask] >= ignore_weight
-            depth = penetration_depth(pts, cap)
-            depth[own] = -1.0
-            inside_any |= depth > tolerance
-            deepest = max(deepest, float(depth.max()))
-        count += int(inside_any.sum())
+            own = cache["own"][name]
+            depth = segment_depth(pts[edges[:, 0]], pts[edges[:, 1]], cap)
+            depth[own[edges].any(axis=1)] = -1.0
+            crossing |= depth > tolerance
+            deepest = max(deepest, float(depth.max()) if len(depth) else 0.0)
+        count += int(crossing.sum())
     return count, deepest
 
 
@@ -137,7 +147,7 @@ def run_frames(scene, rig, meshes, info, render_dir=None, label=""):
         if render_dir:
             scene.render.filepath = os.path.join(render_dir, f"frame_{frame:04d}.png")
             bpy.ops.render.render(write_still=True)
-        print(f"[{label}] frame {frame}: {n_in} skirt verts inside, max depth {depth:.4f}", flush=True)
+        print(f"[{label}] frame {frame}: {n_in} skirt edges cutting into legs, max depth {depth:.4f}", flush=True)
     return rows
 
 

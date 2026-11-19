@@ -217,7 +217,7 @@ def main():
     print("\nsummary:")
     for m in modes:
         rows = results[m]
-        print(f"  {m:<6} vertex-frames inside={sum(r[1] for r in rows):>6} "
+        print(f"  {m:<6} edge-frames crossing={sum(r[1] for r in rows):>6} "
               f"frames with penetration={sum(1 for r in rows if r[1] > 0):>4} "
               f"max depth={max(r[2] for r in rows):.4f}")
     if args.render and len(modes) > 1:

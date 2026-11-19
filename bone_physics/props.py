@@ -129,6 +129,12 @@ class BP_BoneSettings(PropertyGroup):
         name="Iterations",
         min=1, max=32, default=4,
     )
+    substeps: IntProperty(
+        name="Substeps",
+        description="Steps per frame (the armature uses the highest value among its simulated bones). "
+                    "Raise if fast limbs pass through",
+        min=1, max=16, default=4,
+    )
 
 
 class BP_BoneColliderSettings(PropertyGroup):

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .vertex_sim import push_out
+from .vertex_sim import closest_segments, fallback_normals
 
 
 @dataclass
@@ -41,6 +41,30 @@ def _fix_length(pts, head, length, fallback_dir):
     return out
 
 
+MIN_LEVER = 0.15  # contacts closer to the head than this act as if at 15%
+
+
+def _collide_segment(head, tail_pts, collider, radius):
+    """Push the whole bone (head fixed) out of a capsule by rotating it.
+
+    The closest point between the bone and the collider axis is moved out of
+    the collider; since the head is pinned, the tail moves by the push divided
+    by how far along the bone the contact is.
+    """
+    s, t, c1, c2 = closest_segments(head[None, :], tail_pts, collider.a, collider.b)
+    d = c1[0] - c2[0]
+    dist = float(np.linalg.norm(d))
+    r = collider.radius + (collider.rb - collider.radius) * t[0] + radius
+    if dist >= r:
+        return tail_pts
+    if dist > 1e-9:
+        normal = d / dist
+    else:  # bone crosses the axis exactly: push sideways off it
+        normal = fallback_normals((tail_pts[0] - head)[None, :], collider.a, collider.b)[0]
+    lever = max(float(s[0]), MIN_LEVER)
+    return tail_pts + normal * ((r - dist) / lever)
+
+
 def step_tail(state, head, target_tail, length, colliders, gravity, dt, params):
     """Advance one tail particle. Returns the new tail position (3,).
 
@@ -64,7 +88,7 @@ def step_tail(state, head, target_tail, length, colliders, gravity, dt, params):
     for _ in range(max(1, int(params.iterations))):
         pts = _fix_length(pts, head, length, fallback)
         for collider in colliders:
-            push_out(pts, collider, params.radius)
+            pts = _collide_segment(head, pts, collider, params.radius)
     pts = _fix_length(pts, head, length, fallback)  # bones never stretch
 
     state.x = pts[0].copy()

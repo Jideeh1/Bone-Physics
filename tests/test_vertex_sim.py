@@ -177,5 +177,39 @@ class BoneTailTests(unittest.TestCase):
         self.assertLess(np.linalg.norm(x - target), 1e-3)
 
 
+class SegmentCollisionTests(unittest.TestCase):
+    def test_edge_spanning_thin_capsule_is_pushed_off(self):
+        # Two vertices either side of a thin vertical rod: both are outside,
+        # but the edge between them passes straight through it.
+        rod = vs.Capsule(np.array([0, 0, -1.0]), np.array([0, 0, 1.0]), 0.05)
+        skin = np.array([[-0.2, 0, 0], [0.2, 0, 0]])
+        edges = np.array([[0, 1]])
+        layer = vs.VertexLayer()
+        layer.reset(skin)
+        off = layer.step(skin, np.ones(2), edges, [rod], np.zeros(3), 1 / 24, params(iterations=8))
+        final = skin + off
+        depth = vs.segment_depth(final[:1], final[1:], rod)
+        self.assertLessEqual(depth[0], 1e-6)
+
+    def test_bone_segment_is_lifted_off_capsule(self):
+        # Capsule crosses the middle of the bone; the tail tip is clear of it.
+        head = np.zeros(3)
+        target = np.array([1.0, 0, 0])
+        cap = vs.Capsule(np.array([0.5, -1, 0.0]), np.array([0.5, 1, 0.0]), 0.1)
+        st = bs.TailState(target)
+        bp = bs.BoneParams(stiffness=0.0, damping=1.0, gravity_scale=0.0, radius=0.0, iterations=16)
+        x = bs.step_tail(st, head, target, 1.0, [cap], np.zeros(3), 0.0, bp)
+        depth = vs.segment_depth(head[None], x[None], cap)
+        self.assertLessEqual(depth[0], 1e-3)
+        self.assertAlmostEqual(np.linalg.norm(x - head), 1.0, places=9)
+
+    def test_closest_segments_crossing(self):
+        s, t, c1, c2 = vs.closest_segments(np.array([[-1.0, 0, 0]]), np.array([[1.0, 0, 0]]),
+                                            np.array([0, -1.0, 0.5]), np.array([0, 1.0, 0.5]))
+        self.assertAlmostEqual(s[0], 0.5)
+        self.assertAlmostEqual(t[0], 0.5)
+        self.assertAlmostEqual(np.linalg.norm(c1 - c2), 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,7 @@ class BP_PT_main(bpy.types.Panel):
             col.prop(s, "gravity_scale")
             col.prop(s, "radius")
             col.prop(s, "iterations")
+            col.prop(s, "substeps")
             box.operator("bp.copy_bone_settings")
 
         c = pb.bp_bone_collider

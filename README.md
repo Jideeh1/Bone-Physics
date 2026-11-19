@@ -27,14 +27,24 @@ fights its own bone. Spheres and capsules on regular objects also work.
 ## Measured on the stand-in skirt rig
 
 `examples/run_skirt.py`: hips, thigh and shin bones, a flared skirt on
-10 two-bone chains, legs kicking up into the skirt (80 frames). The number is
-skirt vertices inside the thigh/shin capsules, summed over all frames.
+10 two-bone chains, legs kicking up into the skirt (80 frames). The check
+counts skirt **edges** that cut into a thigh/shin capsule, so cloth stretched
+across a leg counts even when every vertex is outside it.
 
-| mode | vertex-frames inside | frames with penetration |
-|---|---|---|
-| no physics | 1017 | 27 |
-| bone physics only | 1138 | 44 |
-| bones + vertex collision | **0** | **0** |
+| mode | edge-frames crossing a leg |
+|---|---|
+| no physics | 2399 |
+| bone physics only | 2138 |
+| bones + vertex collision | **0** |
+
+How collisions are kept from tunneling:
+
+- Simulated bones collide along their whole length (segment vs capsule), so a
+  thigh lifting into the middle of a skirt bone lifts the chain.
+- Cloth edges collide too, not just vertices.
+- Substeps interpolate colliders, parent bones and the skinned target from
+  the previous frame, so a fast kick sweeps through the cloth and pushes it
+  from the side the leg arrives on, instead of teleporting inside it.
 
 ## Layout
 
