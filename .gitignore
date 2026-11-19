@@ -3,3 +3,5 @@ __pycache__/
 renders/
 *.zip
 .venv/
+renders_*.log
+renders_done.flag
