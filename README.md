@@ -68,9 +68,19 @@ examples/
   demo_scene.py, render_demo.py, verify_penetration.py   first sphere demo
 ```
 
+## Install
+
+Download `bone_physics-<version>.zip` from the
+[Releases](https://github.com/Jideeh1/Bone-Physics/releases) page, then in
+Blender 5.2+: Edit > Preferences > Get Extensions > ⌄ > **Install from Disk...**
+
+To build the zip yourself: `python scripts/build_extension.py` (writes to
+`dist/`). Pushing a `v<version>` tag that matches the manifest builds and
+publishes a release through GitHub Actions.
+
 ## Usage in Blender
 
-1. Install the `bone_physics` folder as an extension (Blender 5.2+).
+1. Install the extension (see above).
 2. 3D View > sidebar > **Bone Physics**.
 3. Pose Mode, select the skirt bones, click **Simulate Selected**. Tune
    Stiffness, Damping, Gravity and Tail Radius, then **Copy to Selected**.

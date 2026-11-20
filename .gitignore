@@ -5,3 +5,4 @@ renders/
 .venv/
 renders_*.log
 renders_done.flag
+dist/

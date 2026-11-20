@@ -1,0 +1,38 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the extension zip and publish a release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run solver tests
+        run: |
+          pip install numpy
+          python -m unittest discover -s tests -v
+
+      - name: Check tag matches manifest version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' bone_physics/blender_manifest.toml)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != manifest v$version"; exit 1; }
+
+      - name: Build extension zip
+        run: python scripts/build_extension.py
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/bone_physics-*.zip
+          body_path: RELEASE_NOTES.md
+          prerelease: true
