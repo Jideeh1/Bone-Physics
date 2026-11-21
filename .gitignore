@@ -6,3 +6,8 @@ renders/
 renders_*.log
 renders_done.flag
 dist/
+
+# motion-graphics render temp files
+*.__video.mp4
+*.mp4.audio.json
+*.mp4.wav

@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="out"></canvas>
+<script type="module">
+import { finish } from '/lib/finish.js';
+const q = new URLSearchParams(location.search);
+const mod = await import(q.get('scene'));
+const S = mod.default;
+const W = S.width, H = S.height, FPS = S.fps || 30;
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const out = document.getElementById('out'); out.width = W; out.height = H;
+const layer = mk(W, H), ctx = layer.getContext('2d');
+const acc = mk(W, H), accx = acc.getContext('2d');
+const comp = mk(W, H), compx = comp.getContext('2d');
+const env = { ctx, canvas: layer, width: W, height: H, fps: FPS };
+if (S.mode === '3d' || S.mode === 'hybrid') {
+  const THREE = await import('/lib/three.module.min.js');
+  const gl = mk(W, H);
+  const renderer = new THREE.WebGLRenderer({ canvas: gl, antialias: true, preserveDrawingBuffer: true, alpha: false });
+  renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  Object.assign(env, { THREE, renderer, gl });
+}
+if (S.setup) await S.setup(env);
+
+function drawSample(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+  ctx.clearRect(0, 0, W, H);
+  S.render(t, env);
+  compx.globalCompositeOperation = 'source-over'; compx.globalAlpha = 1;
+  compx.fillStyle = '#000'; compx.fillRect(0, 0, W, H);
+  if (env.gl) compx.drawImage(env.gl, 0, 0);
+  compx.drawImage(layer, 0, 0);
+}
+
+window.__config = { width: W, height: H, fps: FPS, duration: S.duration, audio: S.audio || null, title: S.title || '' };
+window.__render = async (frame) => {
+  const mb = S.motionBlur || { samples: 1, shutter: 180 };
+  const n = Math.max(1, mb.samples | 0), shutter = (mb.shutter ?? 180) / 360 / FPS;
+  const t0 = frame / FPS;
+  env.frameTime = t0; env.frame = frame; // for things that must NOT motion-blur (counters, UI text)
+  if (n === 1) { drawSample(t0); accx.drawImage(comp, 0, 0); }
+  else {
+    for (let i = 0; i < n; i++) {
+      const t = t0 + ((i + 0.5) / n - 0.5) * shutter; // centered shutter (phase = -angle/2)
+      drawSample(Math.max(0, t));
+      accx.globalAlpha = 1 / (i + 1); accx.drawImage(comp, 0, 0);
+    }
+    accx.globalAlpha = 1;
+  }
+  finish(acc, out, S.finish || {}, frame);
+  return true;
+};
+window.__ready = true;
+</script></body></html>
