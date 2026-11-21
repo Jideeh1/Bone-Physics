@@ -154,6 +154,12 @@ def glitch():
 SFX = {"whoosh": whoosh, "impact": impact, "riser": riser, "click": click, "pop": pop, "shimmer": shimmer, "sub": sub, "glitch": glitch}
 
 
+def hit(spec, key, s):
+    """True if the 16-step pattern `key` has an 'x' at step s (empty/missing pattern = off)."""
+    pat = spec.get(key) or ""
+    return bool(pat) and pat[s % len(pat)] == "x"
+
+
 def place(buf, x, t, gain=1.0):
     i = int(round(t * SR))
     if i >= len(buf):
@@ -180,14 +186,14 @@ def main():
             for s in range(16):
                 t = t_bar + s * step + (spec.get("swing", 0) * step if s % 2 else 0)
                 if t >= dur: break
-                if spec.get("kick", "")[s % max(1, len(spec.get("kick", "x")))] == "x":
+                if hit(spec, "kick", s):
                     place(music, k_, t)
                     i = int(t * SR); m = min(int(0.25 * SR), n - i)
                     if m > 0: duck[i:i + m] = np.minimum(duck[i:i + m], 1 - 0.6 * np.exp(-np.arange(m) / SR * 14))
-                if spec.get("clap", "")[s % max(1, len(spec.get("clap", "x")))] == "x": place(music, c_, t, 0.8)
-                if spec.get("hat", "")[s % max(1, len(spec.get("hat", "x")))] == "x": place(music, h_, t, 0.35 + 0.15 * (s % 4 == 2))
+                if hit(spec, "clap", s): place(music, c_, t, 0.8)
+                if hit(spec, "hat", s): place(music, h_, t, 0.35 + 0.15 * (s % 4 == 2))
                 notes = spec.get("bassNotes")
-                if notes and spec.get("bass", "")[s % max(1, len(spec.get("bass", "x")))] == "x":
+                if notes and hit(spec, "bass", s):
                     place(music, bass(hz(notes[b % len(notes)]), step * 2.2), t, 0.9 * 1.0)
             chords = spec.get("pad")
             if chords:
